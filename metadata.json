@@ -1,0 +1,6 @@
+{
+  "name": "MCP Universal Studio v2 — Legendary Orchestrator",
+  "description": "Autonomous Multi-Agent DAG Orchestrator with winremote-mcp, Self-Healing loop, OpenCode bridge, GameDev suite (Unity, Godot, Blender bpy, Rigging) and Skyrim LE modding tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
