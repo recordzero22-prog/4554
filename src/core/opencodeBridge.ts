@@ -1,3 +1,4 @@
+// DEMO: реальные MCP-серверы для Unity/Blender/Skyrim/OpenCode пока не подключены.
 /**
  * @file opencodeBridge.ts
  * Прямая интеграция с OpenCode CLI и конфигуратором opencode.json.

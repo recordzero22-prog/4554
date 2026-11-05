@@ -1,16 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, TabId } from './components/Sidebar';
 import { OrchestratorPanel } from './components/OrchestratorPanel';
 import { ManualMCPPanel } from './components/ManualMCPPanel';
 import { WorkspaceFilesPanel } from './components/WorkspaceFilesPanel';
-import { ModelPoolPanel } from './components/ModelPoolPanel';
-import { EmbeddedChatPanel } from './components/EmbeddedChatPanel';
 import { SetupGuidePanel } from './components/SetupGuidePanel';
-import { CyberArenaGame } from './components/CyberArenaGame';
-import { GeminiAiHub } from './components/GeminiAiHub';
-import { GamedevToolsPanel } from './components/GamedevToolsPanel';
-import { OpencodeBridgePanel } from './components/OpencodeBridgePanel';
+import { BrowserPanel } from './components/BrowserPanel';
+import { PackagingPanel } from './components/PackagingPanel';
 import { Task, LogEntry, HITLRequest, AgentRole, WorkspaceFile, ModelProvider, MCPResult } from './types';
 import { createNewTask, decomposeGoalHeuristically } from './core/dagPlanner';
 import { evaluateHITLPolicy } from './core/hitlPolicy';
@@ -18,6 +14,25 @@ import { analyzeExecutionFailure } from './core/selfHealing';
 import { SandboxEngine, INITIAL_WORKSPACE_FILES } from './core/sandboxEngine';
 import { DEFAULT_PROVIDERS } from './core/modelCascade';
 import { saveTasks, loadTasks, saveActiveTaskId, loadActiveTaskId, clearTasks, saveProviders, loadProviders } from './core/taskStorage';
+import { realMcpClient } from './core/realMcpClient';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+
+// Task 5.5: React.lazy + Suspense для тяжелых панелей (Bundle main < 500 kB)
+const ModelPoolPanel = React.lazy(() =>
+  import('./components/ModelPoolPanel').then(m => ({ default: m.ModelPoolPanel }))
+);
+const CyberArenaGame = React.lazy(() =>
+  import('./components/CyberArenaGame').then(m => ({ default: m.CyberArenaGame }))
+);
+const GeminiAiHub = React.lazy(() =>
+  import('./components/GeminiAiHub').then(m => ({ default: m.GeminiAiHub }))
+);
+const GamedevToolsPanel = React.lazy(() =>
+  import('./components/GamedevToolsPanel').then(m => ({ default: m.GamedevToolsPanel }))
+);
+const OpencodeBridgePanel = React.lazy(() =>
+  import('./components/OpencodeBridgePanel').then(m => ({ default: m.OpencodeBridgePanel }))
+);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('orchestrator');
@@ -29,6 +44,7 @@ export default function App() {
   const [strictMode, setStrictMode] = useState<boolean>(false);
   const [selfHealingEnabled, setSelfHealingEnabled] = useState<boolean>(true);
   const [providers, setProviders] = useState<ModelProvider[]>(() => loadProviders() || DEFAULT_PROVIDERS);
+  const [mcpHealthStatus, setMcpHealthStatus] = useState<'checking' | 'connected' | 'offline'>('checking');
 
   // Sync tasks to localStorage whenever they change
   useEffect(() => {
@@ -68,11 +84,26 @@ export default function App() {
     setLogs(prev => [...prev, entry]);
   };
 
+  // Task 2.4: Health-check при старте
+  const checkMcpHealth = async () => {
+    setMcpHealthStatus('checking');
+    const isAlive = await realMcpClient.checkHealth();
+    setMcpHealthStatus(isAlive ? 'connected' : 'offline');
+    if (isAlive) {
+      addLog('Coordinator', 'winremote-mcp сервер подтвержден: http://127.0.0.1:8090/mcp доступен.');
+    } else {
+      addLog('Watchdog', '⚠️ winremote-mcp недоступен на 8090. Запустите winremote-mcp.exe для управления ОС.');
+    }
+  };
+
+  useEffect(() => {
+    checkMcpHealth();
+  }, []);
+
   // Initial welcome and ready telemetry
   useEffect(() => {
     addLog('Coordinator', 'MCP Universal Studio v2.0 инициализирована в режиме оркестрации DAG.');
-    addLog('Coordinator', 'Подключен локальный транспорт winremote-mcp: http://127.0.0.1:8090/mcp');
-    addLog('Coordinator', 'Песочница workspace инициализирована (файлов: 4).');
+    addLog('Coordinator', 'Транспорт: Electron IPC / winremote-mcp на http://127.0.0.1:8090/mcp');
 
     const storedTasks = loadTasks();
     if (storedTasks.length > 0) {
@@ -81,6 +112,11 @@ export default function App() {
         `Слой персистентности: восстановлено ${storedTasks.length} сохраненных задач из хранилища (localStorage).`
       );
     }
+
+    // Task 5.3: Синхронизация файлов workspace с диском
+    sandboxRef.current.syncFilesFromMcp('workspace').then(() => {
+      setWorkspaceFiles(sandboxRef.current.getFiles());
+    });
   }, []);
 
   // Global hotkey Alt+O listener (matching webview-preload / main window behavior)
@@ -187,7 +223,7 @@ export default function App() {
 
           // Tool Execution in Sandbox
           addLog('Implementer', `Исполнение MCP вызова [${sub.tool}] с аргументами: ${JSON.stringify(sub.toolArgs)}`, task.id);
-          let execRes = sandboxRef.current.executeTool(sub.tool, sub.toolArgs);
+          let execRes = await sandboxRef.current.executeTool(sub.tool, sub.toolArgs);
           sub.output = execRes.result;
           setWorkspaceFiles(sandboxRef.current.getFiles());
 
@@ -218,14 +254,14 @@ export default function App() {
                   task.id
                 );
                 await new Promise(r => setTimeout(r, 450));
-                const fixRes = sandboxRef.current.executeTool(analysis.fixTool, analysis.fixArgs);
+                const fixRes = await sandboxRef.current.executeTool(analysis.fixTool, analysis.fixArgs);
                 setWorkspaceFiles(sandboxRef.current.getFiles());
                 addLog('Implementer', `[Результат автоисправления]: ${fixRes.result.slice(0, 110)}`, task.id);
 
                 // Retry original step with repaired environment / file
                 addLog('Coordinator', `🔁 Повторная попытка выполнения шага: ${sub.title}...`, task.id);
                 await new Promise(r => setTimeout(r, 400));
-                const retryRes = sandboxRef.current.executeTool(sub.tool, sub.toolArgs);
+                const retryRes = await sandboxRef.current.executeTool(sub.tool, sub.toolArgs);
                 setWorkspaceFiles(sandboxRef.current.getFiles());
 
                 if (retryRes.ok) {
@@ -253,7 +289,6 @@ export default function App() {
 
           addLog('Implementer', `Результат [${sub.tool}]: ${execRes.result.slice(0, 120)} (${execRes.executionTimeMs}ms)`, task.id);
         } else {
-          // Verification / analytical subtask
           sub.output = 'Анализ завершен, все выходные сигнатуры соответствуют спецификации.';
         }
 
@@ -304,8 +339,8 @@ export default function App() {
   };
 
   // Direct MCP Tool execution for Manual Panel
-  const handleExecuteManualTool = (tool: string, args: Record<string, unknown>): MCPResult => {
-    const res = sandboxRef.current.executeTool(tool, args);
+  const handleExecuteManualTool = async (tool: string, args: Record<string, unknown>): Promise<MCPResult> => {
+    const res = await sandboxRef.current.executeTool(tool, args);
     setWorkspaceFiles(sandboxRef.current.getFiles());
     addLog('Implementer', `[Ручной вызов] ${tool}: ${res.result.slice(0, 100)} (${res.executionTimeMs}ms)`);
     return res;
@@ -369,8 +404,27 @@ export default function App() {
         hitlCount={hitlRequests.length}
         onQuickRunValidation={handleRunValidationScenario}
         isExecuting={isProcessing}
-        mcpServerStatus="connected"
+        mcpServerStatus={mcpHealthStatus === 'connected' ? 'connected' : 'idle'}
       />
+
+      {/* Task 2.4: winremote-mcp offline warning banner */}
+      {mcpHealthStatus === 'offline' && (
+        <div className="bg-amber-950/40 border-b border-amber-500/40 px-4 py-2 flex items-center justify-between text-xs text-amber-200 shrink-0">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>winremote-mcp не запущен:</strong> Сервер MCP на <code>http://127.0.0.1:8090/mcp</code> недоступен. Запустите <code>winremote-mcp.exe</code> или скрипт <code>start-studio.bat</code> для прямого управления Windows и WSL2.
+            </span>
+          </div>
+          <button
+            onClick={checkMcpHealth}
+            className="px-2.5 py-1 rounded bg-[#21262d] hover:bg-[#30363d] text-white border border-[#30363d] flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3 h-3 text-amber-400" />
+            <span>Повторить проверку</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Studio Body: Sidebar + Active Panel */}
       <div className="flex flex-1 overflow-hidden">
@@ -409,40 +463,15 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'game' && (
-            <CyberArenaGame
-              onSpawnMcpTask={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, '3d-game-agent');
-              }}
-            />
-          )}
-
-          {activeTab === 'gamedev' && (
-            <GamedevToolsPanel
-              onExecuteTool={handleExecuteManualTool}
+          {activeTab === 'browser' && (
+            <BrowserPanel
               onSendToOrchestrator={goal => {
                 setActiveTab('orchestrator');
-                submitTask(goal, 'gamedev-panel');
+                submitTask(goal, 'browser');
               }}
-            />
-          )}
-
-          {activeTab === 'opencode' && (
-            <OpencodeBridgePanel
-              onSendToOrchestrator={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, 'opencode-bridge');
-              }}
-              onSaveConfigFile={handleSaveFile}
-            />
-          )}
-
-          {activeTab === 'gemini' && (
-            <GeminiAiHub
-              onSendToOrchestrator={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, 'gemini-hub');
+              onOpenManualTool={(tool, args) => {
+                setActiveTab('manual');
+                handleExecuteManualTool(tool, args);
               }}
             />
           )}
@@ -461,46 +490,65 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'models' && (
-            <ModelPoolPanel
-              providers={providers}
-              onToggleProviderStatus={handleToggleProviderStatus}
-              onAddProvider={handleAddProvider}
-              onDeleteProvider={handleDeleteProvider}
-              onUpdateProviderModels={handleUpdateProviderModels}
-              onResetProviders={handleResetProviders}
-            />
-          )}
+          {/* Lazy Loaded Panels (Task 5.5) */}
+          <Suspense
+            fallback={
+              <div className="flex-1 flex items-center justify-center text-xs text-[#8b949e]">
+                Загрузка компонента...
+              </div>
+            }
+          >
+            {activeTab === 'models' && (
+              <ModelPoolPanel
+                providers={providers}
+                onToggleProviderStatus={handleToggleProviderStatus}
+                onAddProvider={handleAddProvider}
+                onDeleteProvider={handleDeleteProvider}
+                onUpdateProviderModels={handleUpdateProviderModels}
+                onResetProviders={handleResetProviders}
+              />
+            )}
 
-          {activeTab === 'deepseek' && (
-            <EmbeddedChatPanel
-              providerName="DeepSeek"
-              onSendToOrchestrator={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, 'deepseek-chat');
-              }}
-            />
-          )}
+            {activeTab === 'game' && (
+              <CyberArenaGame
+                onSpawnMcpTask={goal => {
+                  setActiveTab('orchestrator');
+                  submitTask(goal, '3d-game-agent');
+                }}
+              />
+            )}
 
-          {activeTab === 'chatgpt' && (
-            <EmbeddedChatPanel
-              providerName="ChatGPT"
-              onSendToOrchestrator={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, 'chatgpt-chat');
-              }}
-            />
-          )}
+            {activeTab === 'gamedev' && (
+              <GamedevToolsPanel
+                onExecuteTool={handleExecuteManualTool}
+                onSendToOrchestrator={goal => {
+                  setActiveTab('orchestrator');
+                  submitTask(goal, 'gamedev-panel');
+                }}
+              />
+            )}
 
-          {activeTab === 'fichi' && (
-            <EmbeddedChatPanel
-              providerName="Fichi AI"
-              onSendToOrchestrator={goal => {
-                setActiveTab('orchestrator');
-                submitTask(goal, 'fichi-ai-chat');
-              }}
-            />
-          )}
+            {activeTab === 'opencode' && (
+              <OpencodeBridgePanel
+                onSendToOrchestrator={goal => {
+                  setActiveTab('orchestrator');
+                  submitTask(goal, 'opencode-bridge');
+                }}
+                onSaveConfigFile={handleSaveFile}
+              />
+            )}
+
+            {activeTab === 'gemini' && (
+              <GeminiAiHub
+                onSendToOrchestrator={goal => {
+                  setActiveTab('orchestrator');
+                  submitTask(goal, 'gemini-hub');
+                }}
+              />
+            )}
+          </Suspense>
+
+          {activeTab === 'packaging' && <PackagingPanel />}
 
           {activeTab === 'guide' && <SetupGuidePanel />}
         </main>

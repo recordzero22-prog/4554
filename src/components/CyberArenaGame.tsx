@@ -537,8 +537,9 @@ export const CyberArenaGame: React.FC<CyberArenaGameProps> = ({ onSpawnMcpTask }
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-[#161b22]/90 border border-[#30363d] rounded-lg px-3 py-1.5 flex items-center gap-2 pointer-events-auto shadow-md">
-              <span className="font-mono text-xs font-bold text-white tracking-wide">
+              <span className="font-mono text-xs font-bold text-white tracking-wide flex items-center gap-1.5">
                 CYBER-ARENA <span className="text-blue-400 font-extrabold text-[10px] px-1 py-0.5 rounded bg-blue-500/20 border border-blue-500/40">3D</span>
+                <span className="text-[10px] font-normal px-1 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">Demo</span>
               </span>
               <span className="text-[11px] text-[#8b949e]">| Wave {wave}</span>
             </div>

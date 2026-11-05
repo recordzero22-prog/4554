@@ -1,3 +1,4 @@
+// DEMO: реальные MCP-серверы для Unity/Blender/Skyrim/OpenCode пока не подключены.
 import { MCPToolDefinition, MCPResult } from '../types';
 
 export const GAMEDEV_MCP_TOOLS: MCPToolDefinition[] = [

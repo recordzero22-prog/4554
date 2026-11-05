@@ -124,6 +124,9 @@ export const OpencodeBridgePanel: React.FC<OpencodeBridgePanelProps> = ({
           <div>
             <h2 className="text-base font-semibold text-white flex items-center gap-2">
               Интеграция с OpenCode CLI & Оркестром
+              <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono">
+                Demo / Coming Soon
+              </span>
               <span className="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 font-mono">
                 opencode.json v1.2.0
               </span>

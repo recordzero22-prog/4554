@@ -66,21 +66,54 @@ test('DAG Planner: watchdog detects stalled task after timeout', () => {
   assert.equal(isTaskStalled(task, 60000), false);
 });
 
-test('Sandbox Engine: writes file and executes Python script correctly', () => {
+test('Sandbox Engine: executes FileWrite -> FileRead -> FileList via MCP mock pipeline', async () => {
+  // Task 5.9: Monkey-patch window.mcpStudio for realistic unit test
+  const virtualFs = new Map<string, string>();
+  (globalThis as any).window = {
+    mcpStudio: {
+      isElectron: true,
+      callTool: async (tool: string, args: Record<string, unknown>) => {
+        if (tool === 'FileWrite') {
+          virtualFs.set(String(args.path), String(args.content));
+          return { ok: true, result: `Successfully wrote ${args.path}` };
+        }
+        if (tool === 'FileRead') {
+          const content = virtualFs.get(String(args.path));
+          if (content !== undefined) return { ok: true, result: content };
+          return { ok: false, result: `File not found: ${args.path}` };
+        }
+        if (tool === 'FileList') {
+          const list = Array.from(virtualFs.keys()).map(k => `      ${k} (100 B)`).join('\n');
+          return { ok: true, result: list };
+        }
+        if (tool === 'Shell') {
+          if (args.command === 'Get-Date') {
+            return { ok: true, result: 'Thursday, November 5, 2026 3:30:00 AM' };
+          }
+          return { ok: true, result: `Output of ${args.command}` };
+        }
+        return { ok: true, result: 'OK' };
+      },
+    },
+  };
+
   const sandbox = new SandboxEngine([]);
-  const writeRes = sandbox.executeTool('FileWrite', {
+  const writeRes = await sandbox.executeTool('FileWrite', {
     path: 'test_script.py',
     content: 'print("Hello from Autonomous MCP")'
   });
   assert.equal(writeRes.ok, true);
 
-  const file = sandbox.getFile('test_script.py');
-  assert.ok(file);
-  assert.equal(file?.name, 'test_script.py');
+  const readRes = await sandbox.executeTool('FileRead', { path: 'test_script.py' });
+  assert.equal(readRes.ok, true);
+  assert.equal(readRes.result, 'print("Hello from Autonomous MCP")');
 
-  const execRes = sandbox.executeTool('Shell', { command: 'python test_script.py' });
-  assert.equal(execRes.ok, true);
-  assert.match(execRes.result, /Hello from Autonomous MCP/);
+  const shellRes = await sandbox.executeTool('Shell', { command: 'Get-Date' });
+  assert.equal(shellRes.ok, true);
+  assert.match(shellRes.result, /November 5, 2026/);
+
+  // cleanup window mock
+  delete (globalThis as any).window;
 });
 
 test('Model Cascade: falls back to subsequent model when primary fails', () => {
@@ -296,23 +329,29 @@ test('OpenCode Bridge: manages sessions, generates opencode.json, and executes q
   assert.equal(session.status, 'idle');
 });
 
-test('Sandbox Engine: executes GameDev tools and handles self-healing recovery commands', () => {
+test('Sandbox Engine: executes GameDev tools and handles MCP offline message without simulations', async () => {
   const sandbox = new SandboxEngine([]);
 
   // Skyrim tool through sandbox
-  const nifRes = sandbox.executeTool('Skyrim_NifParse', { path: 'armor.nif' });
+  const nifRes = await sandbox.executeTool('Skyrim_NifParse', { path: 'armor.nif' });
   assert.equal(nifRes.ok, true);
   assert.ok(nifRes.result.includes('Skyrim LE'));
 
-  // pip install simulation
-  const pipRes = sandbox.executeTool('Shell', { command: 'pip install requests' });
-  assert.equal(pipRes.ok, true);
-  assert.ok(pipRes.result.includes('Successfully installed requests'));
+  // Real MCP call when offline returns clear error prompt instead of fake simulation
+  const shellRes = await sandbox.executeTool('Shell', { command: 'Get-Date' });
+  assert.equal(shellRes.ok, false);
+  assert.ok(shellRes.result.includes('MCP Server недоступен'));
+});
 
-  // simulated failure trigger
-  const failRes = sandbox.executeTool('Shell', { command: 'python fail_python_script.py' });
-  assert.equal(failRes.ok, false);
-  assert.ok(failRes.result.includes('ModuleNotFoundError'));
+test('Real MCP Client: local validation catches empty commands without network call', async () => {
+  const { realMcpClient } = await import('./realMcpClient');
+  const res = await realMcpClient.callTool('Shell', { command: '   ' });
+  assert.equal(res.ok, false);
+  assert.ok(res.result.includes('Validation error'));
+
+  const fileRes = await realMcpClient.callTool('FileWrite', { path: '' });
+  assert.equal(fileRes.ok, false);
+  assert.ok(fileRes.result.includes('Validation error'));
 });
 
 test('TaskStorage: persists and restores custom providers', async () => {
@@ -342,6 +381,25 @@ test('TaskStorage: persists and restores custom providers', async () => {
   assert.equal(loaded?.[0].name, 'Groq Fast LPU');
   assert.equal(loaded?.[0].isCustom, true);
   assert.equal(loaded?.[0].envVarName, 'GROQ_API_KEY');
+});
+
+test('Real MCP Client: initializes with default endpoint and handles offline fallback', async () => {
+  const { realMcpClient } = await import('./realMcpClient');
+  assert.ok(realMcpClient);
+  assert.equal(realMcpClient.isClientConnected(), false);
+
+  // Calling callTool when offline should return error with fallback suggestion
+  const res = await realMcpClient.callTool('Shell', { command: 'echo 123' });
+  assert.equal(res.ok, false);
+  assert.ok(res.result);
+});
+
+test('Sandbox Engine: syncFilesFromMcp falls back to local files when server is offline', async () => {
+  const sandbox = new SandboxEngine([]);
+  sandbox.writeFile('test_sync.txt', 'sync content');
+  const count = await sandbox.syncFilesFromMcp();
+  assert.equal(count, 1);
+  assert.equal(sandbox.getFile('test_sync.txt')?.content, 'sync content');
 });
 
 

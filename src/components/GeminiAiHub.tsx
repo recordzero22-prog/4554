@@ -129,6 +129,9 @@ export const GeminiAiHub: React.FC<GeminiAiHubProps> = ({ onSendToOrchestrator }
         <h2 className="text-base font-bold text-white flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-purple-400" />
           <span>Gemini AI Hub & Мультимодальность</span>
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono font-normal">
+            Demo / Coming Soon
+          </span>
         </h2>
         <p className="text-xs text-[#8b949e] mt-1">
           Многопоточный чат Gemini, заземление поиском Google (Search Grounding), транскрипция речи, генерация музыки Lyria и Live API.

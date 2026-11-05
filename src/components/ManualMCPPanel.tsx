@@ -4,7 +4,7 @@ import { KNOWN_MCP_TOOLS, createRpcRequest } from '../core/mcpProtocol';
 import { MCPResult } from '../types';
 
 interface ManualMCPPanelProps {
-  onExecuteTool: (tool: string, args: Record<string, unknown>) => MCPResult;
+  onExecuteTool: (tool: string, args: Record<string, unknown>) => Promise<MCPResult> | MCPResult;
 }
 
 export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool }) => {
@@ -16,6 +16,7 @@ export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool })
   const [lastLatency, setLastLatency] = useState<number | null>(null);
   const [lastRpcRequest, setLastRpcRequest] = useState<unknown | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
 
   const presets = [
     {
@@ -62,7 +63,8 @@ export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool })
     setJsonInput(JSON.stringify(preset.data, null, 2));
   };
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
+    setIsRunning(true);
     try {
       const payload = JSON.parse(jsonInput);
       const toolName = payload.tool || selectedToolName;
@@ -72,7 +74,7 @@ export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool })
       setLastRpcRequest(rpcReq);
 
       const start = performance.now();
-      const res = onExecuteTool(toolName, toolArgs);
+      const res = await onExecuteTool(toolName, toolArgs);
       const duration = Math.round(performance.now() - start);
       setLastLatency(res.executionTimeMs ?? duration);
 
@@ -93,6 +95,8 @@ export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool })
       setOutput(JSON.stringify(fullResponse, null, 2));
     } catch (err) {
       setOutput(`Ошибка парсинга или исполнения: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsRunning(false);
     }
   };
 
@@ -170,10 +174,11 @@ export const ManualMCPPanel: React.FC<ManualMCPPanelProps> = ({ onExecuteTool })
             <button
               id="manual-execute"
               onClick={handleExecute}
-              className="btn-primary flex items-center gap-2 bg-[#238636] hover:bg-[#2ea043] text-white font-bold px-4 py-2 rounded-md shadow transition-colors cursor-pointer text-xs"
+              disabled={isRunning}
+              className="btn-primary flex items-center gap-2 bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 text-white font-bold px-4 py-2 rounded-md shadow transition-colors cursor-pointer text-xs"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Выполнить JSON-RPC</span>
+              <span>{isRunning ? 'Выполняется...' : 'Выполнить JSON-RPC'}</span>
             </button>
           </div>
         </div>

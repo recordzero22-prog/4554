@@ -17,7 +17,7 @@ import { GAMEDEV_MCP_TOOLS, executeGamedevTool } from '../core/gamedevMcpTools';
 import { MCPResult } from '../types';
 
 interface GamedevToolsPanelProps {
-  onExecuteTool: (tool: string, args: Record<string, unknown>) => MCPResult;
+  onExecuteTool: (tool: string, args: Record<string, unknown>) => Promise<MCPResult> | MCPResult;
   onSendToOrchestrator: (goal: string) => void;
 }
 
@@ -35,6 +35,7 @@ export const GamedevToolsPanel: React.FC<GamedevToolsPanelProps> = ({
   });
   const [lastResult, setLastResult] = useState<MCPResult | null>(null);
   const [isCopied, setIsCopied] = useState<boolean>(false);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
 
   const selectedTool =
     GAMEDEV_MCP_TOOLS.find((t) => t.name === selectedToolName) || GAMEDEV_MCP_TOOLS[0];
@@ -90,9 +91,14 @@ export const GamedevToolsPanel: React.FC<GamedevToolsPanelProps> = ({
     }
   };
 
-  const handleRun = () => {
-    const res = onExecuteTool ? onExecuteTool(selectedTool.name, toolArgs) : executeGamedevTool(selectedTool.name, toolArgs);
-    setLastResult(res);
+  const handleRun = async () => {
+    setIsRunning(true);
+    try {
+      const res = onExecuteTool ? await onExecuteTool(selectedTool.name, toolArgs) : executeGamedevTool(selectedTool.name, toolArgs);
+      setLastResult(res);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const handleCopyResult = () => {
@@ -121,6 +127,9 @@ export const GamedevToolsPanel: React.FC<GamedevToolsPanelProps> = ({
           <div>
             <h2 className="text-base font-semibold text-white flex items-center gap-2">
               GameDev & Skyrim LE MCP Suite
+              <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700 font-mono">
+                Demo / Coming Soon
+              </span>
               <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-mono">
                 v20.2.0.7 / Unity 6 / Blender 4.x
               </span>
@@ -310,10 +319,11 @@ export const GamedevToolsPanel: React.FC<GamedevToolsPanelProps> = ({
                 </button>
                 <button
                   onClick={handleRun}
-                  className="px-4 py-1.5 rounded-lg bg-[#238636] hover:bg-[#2ea043] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  disabled={isRunning}
+                  className="px-4 py-1.5 rounded-lg bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
                 >
                   <Play className="w-3.5 h-3.5" />
-                  Выполнить инструмент
+                  {isRunning ? 'Выполняется...' : 'Выполнить инструмент'}
                 </button>
               </div>
             </div>

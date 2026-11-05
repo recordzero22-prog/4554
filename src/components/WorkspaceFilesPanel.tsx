@@ -19,7 +19,7 @@ interface WorkspaceFilesPanelProps {
   onRefresh: () => void;
   onSaveFile: (path: string, content: string) => void;
   onDeleteFile: (path: string) => void;
-  onExecuteInSandbox: (tool: string, args: Record<string, unknown>) => MCPResult;
+  onExecuteInSandbox: (tool: string, args: Record<string, unknown>) => Promise<MCPResult> | MCPResult;
 }
 
 export const WorkspaceFilesPanel: React.FC<WorkspaceFilesPanelProps> = ({
@@ -65,7 +65,7 @@ export const WorkspaceFilesPanel: React.FC<WorkspaceFilesPanelProps> = ({
     }, 100);
   };
 
-  const handleRunInSandbox = () => {
+  const handleRunInSandbox = async () => {
     if (!selectedFile) return;
     let tool = 'Shell';
     let command = '';
@@ -81,7 +81,8 @@ export const WorkspaceFilesPanel: React.FC<WorkspaceFilesPanelProps> = ({
       command = `Get-Content ${selectedFile.path}`;
     }
 
-    const res = onExecuteInSandbox(tool, { command });
+    setSandboxOutput(`[Запуск команды]: ${tool} -> "${command}"...`);
+    const res = await onExecuteInSandbox(tool, { command });
     setSandboxOutput(`[Команда]: ${tool} -> "${command}"\n[Результат]:\n${res.result}`);
   };
 

@@ -1,5 +1,6 @@
 import { MCPResult, WorkspaceFile } from '../types';
 import { executeGamedevTool } from './gamedevMcpTools';
+import { realMcpClient } from './realMcpClient';
 
 export const INITIAL_WORKSPACE_FILES: WorkspaceFile[] = [
   {
@@ -83,11 +84,9 @@ if __name__ == '__main__':
 
 export class SandboxEngine {
   private files: Map<string, WorkspaceFile>;
-  private installedPackages: Set<string>;
 
   constructor(initialFiles: WorkspaceFile[] = INITIAL_WORKSPACE_FILES) {
     this.files = new Map();
-    this.installedPackages = new Set();
     initialFiles.forEach(f => this.files.set(f.path, { ...f }));
   }
 
@@ -131,165 +130,112 @@ export class SandboxEngine {
     return this.files.delete(path);
   }
 
-  public executeTool(name: string, args: Record<string, unknown>): MCPResult {
+  /**
+   * Task 5.3: Синхронизация списка файлов с реальным MCP сервером и диском
+   */
+  public async syncFilesFromMcp(directory: string = 'workspace'): Promise<number> {
+    try {
+      const res = await realMcpClient.callTool('FileList', { path: directory });
+      if (res.ok && typeof res.result === 'string') {
+        const lines = res.result.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('(') && !trimmed.startsWith('[')) {
+            const fileName = trimmed.split(/\s+/).pop() || trimmed;
+            if (!this.files.has(fileName)) {
+              this.writeFile(fileName, `# Synced from real MCP ${fileName}`);
+            }
+          }
+        }
+      }
+    } catch {
+      // Игнорируем сетевые ошибки фоновой синхронизации
+    }
+    return this.files.size;
+  }
+
+  /**
+   * Task 2.3: Реальное исполнение инструментов через winremote-mcp.
+   * Убраны все симуляции. Если MCP недоступен, возвращается понятная ошибка оператору.
+   */
+  public async executeTool(name: string, args: Record<string, unknown> = {}): Promise<MCPResult> {
     const start = performance.now();
 
-    if (name === 'FileWrite') {
-      const path = String(args.path || 'unnamed.txt');
-      const content = String(args.content || '');
-      this.writeFile(path, content);
-      return {
-        ok: true,
-        result: `Успешно записан файл: ${path} (${new Blob([content]).size} bytes)`,
-        executionTimeMs: Math.round(performance.now() - start),
-      };
+    // Нормализация аргументов
+    let toolName = name;
+    const toolArgs = { ...args };
+    if (toolName === 'ProcessList') {
+      toolName = 'ListProcesses';
+    }
+    if (toolName === 'FileList' && toolArgs.directory && !toolArgs.path) {
+      toolArgs.path = toolArgs.directory;
     }
 
-    if (name === 'FileRead') {
-      const path = String(args.path || '');
-      const file = this.getFile(path);
-      if (!file) {
-        return {
-          ok: false,
-          result: `Ошибка: Файл "${path}" не найден в workspace`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-      return {
-        ok: true,
-        result: file.content,
-        executionTimeMs: Math.round(performance.now() - start),
-      };
+    // GameDev tools (Unity, Godot, Blender, Rigging, Skyrim)
+    if (
+      toolName.startsWith('Unity_') ||
+      toolName.startsWith('Godot_') ||
+      toolName.startsWith('Blender_') ||
+      toolName.startsWith('Rigging_') ||
+      toolName.startsWith('Anim_') ||
+      toolName.startsWith('Skyrim_')
+    ) {
+      return executeGamedevTool(toolName, toolArgs);
     }
 
-    if (name === 'FileList') {
-      const list = this.getFiles().map(f => `${f.isDirectory ? '[DIR] ' : '      '}${f.path} (${f.size} B)`);
-      return {
-        ok: true,
-        result: list.join('\n') || '(Директория пуста)',
-        executionTimeMs: Math.round(performance.now() - start),
-      };
-    }
+    // Реальный вызов через MCP Client (Electron IPC или HTTP Streamable)
+    try {
+      const res = await realMcpClient.callTool(toolName, toolArgs);
 
-    if (name === 'Unity_CreateGameObject' || name.startsWith('Unity_') || name.startsWith('Godot_') || name.startsWith('Blender_') || name.startsWith('Rigging_') || name.startsWith('Anim_') || name.startsWith('Skyrim_')) {
-      const gamedevRes = executeGamedevTool(name, args);
-      return gamedevRes;
-    }
-
-    if (name === 'Shell') {
-      const cmd = String(args.command || '');
-      let output = '';
-
-      if (cmd.includes('pip install')) {
-        const pkgMatch = cmd.match(/pip install\s+([a-zA-Z0-9_\-]+)/);
-        const pkg = pkgMatch ? pkgMatch[1] : 'package';
-        this.installedPackages.add(pkg);
-        return {
-          ok: true,
-          result: `Collecting ${pkg}\n  Downloading ${pkg}-2.31.0-py3-none-any.whl (62 kB)\nInstalling collected packages: ${pkg}\nSuccessfully installed ${pkg}-2.31.0\nProcess finished with exit code 0`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-
-      if (cmd.includes('npm install')) {
-        const pkgMatch = cmd.match(/npm install\s+([a-zA-Z0-9_\-]+)/);
-        const pkg = pkgMatch ? pkgMatch[1] : 'package';
-        this.installedPackages.add(pkg);
-        return {
-          ok: true,
-          result: `added 1 package, and audited 42 packages in 1s\nfound 0 vulnerabilities\nInstalled ${pkg} successfully.`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-
-      if (cmd.includes('test_missing_pkg.py')) {
-        if (!this.installedPackages.has('requests')) {
-          return {
-            ok: false,
-            result: `Traceback (most recent call last):\n  File "test_missing_pkg.py", line 2, in <module>\n    import requests\nModuleNotFoundError: No module named 'requests'`,
-            executionTimeMs: Math.round(performance.now() - start),
-          };
-        }
-        return {
-          ok: true,
-          result: `[Python 3.11.8 Runtime]\nExecuting test_missing_pkg.py...\nRequests version: 2.31.0 (Loaded from site-packages)\nProcess finished with exit code 0`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-
-      if (cmd.includes('fail_python')) {
-        return {
-          ok: false,
-          result: `Traceback (most recent call last):\n  File "test_missing_pkg.py", line 2, in <module>\n    import requests\nModuleNotFoundError: No module named 'requests'`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-
-      if (cmd.includes('fail_syntax') || cmd.includes('bad_syntax.py')) {
-        return {
-          ok: false,
-          result: `  File "bad_syntax.py", line 4\n    def broken(\n               ^\nSyntaxError: unexpected EOF while parsing`,
-          executionTimeMs: Math.round(performance.now() - start),
-        };
-      }
-
-      if (cmd.includes('python')) {
-        const fileMatch = cmd.match(/python\s+([a-zA-Z0-9_\-\.]+)/);
-        const targetFile = fileMatch ? fileMatch[1] : null;
-        if (targetFile) {
-          const file = this.getFile(targetFile);
-          if (file) {
-            if (file.content.includes('broken(') || file.content.includes('SyntaxError')) {
-              return {
-                ok: false,
-                result: `  File "${targetFile}", line 3\n    broken syntax here ===\n                   ^\nSyntaxError: invalid syntax`,
-                executionTimeMs: Math.round(performance.now() - start),
-              };
-            }
-            if (file.content.includes('import requests') && !this.installedPackages.has('requests')) {
-              // Module error
-              return {
-                ok: false,
-                result: `Traceback (most recent call last):\n  File "${targetFile}", line 1, in <module>\n    import requests\nModuleNotFoundError: No module named 'requests'`,
-                executionTimeMs: Math.round(performance.now() - start),
-              };
-            }
-            output = `[Python 3.11.8 Runtime]\nExecuting ${targetFile}...\n` +
-              (file.content.includes('Hello from Autonomous MCP')
-                ? 'Hello from Autonomous MCP\nProcess finished with exit code 0'
-                : 'Script output generated successfully.\nProcess finished with exit code 0');
-          } else {
-            output = `python: can't open file '${targetFile}': [Errno 2] No such file or directory`;
-            return {
-              ok: false,
-              result: output,
-              executionTimeMs: Math.round(performance.now() - start),
-            };
+      if (res.ok) {
+        // Task 5.3: Обновление локальной зеркальной файловой таблицы после реальных операций
+        if (toolName === 'FileWrite') {
+          const p = String(toolArgs.path || 'unnamed.txt');
+          const c = String(toolArgs.content || '');
+          this.writeFile(p, c);
+          await this.syncFilesFromMcp('workspace');
+        } else if (toolName === 'FileRead') {
+          const p = String(toolArgs.path || '');
+          if (p && res.result) {
+            this.writeFile(p, res.result);
           }
-        } else {
-          output = `Python 3.11.8 (tags/v3.11.8:db85d51, Feb  6 2024, 22:03:32) [MSC v.1937 64 bit (AMD64)] on win32`;
+        } else if (toolName === 'FileList') {
+          await this.syncFilesFromMcp(String(toolArgs.path || 'workspace'));
         }
-      } else if (cmd.includes('Get-Date')) {
-        output = new Date().toUTCString();
-      } else if (cmd.includes('node')) {
-        output = `v20.12.2\nHello from Autonomous MCP`;
-      } else if (cmd.startsWith('echo')) {
-        output = cmd.replace(/^echo\s+/, '').replace(/['"]/g, '');
-      } else {
-        output = `PowerShell Core 7.4.2\nCommand executed: ${cmd}\nExit code: 0\nStatus: Success`;
+
+        return {
+          ok: true,
+          result: res.result,
+          executionTimeMs: res.executionTimeMs || Math.round(performance.now() - start),
+        };
+      }
+
+      // Если MCP сервер недоступен, возвращаем строгое сообщение без симуляций (Task 2.3)
+      if (
+        res.result.includes('недоступен') ||
+        res.result.includes('timeout') ||
+        res.result.includes('502') ||
+        res.result.includes('Failed to fetch') ||
+        res.result.includes('ECONNREFUSED')
+      ) {
+        return {
+          ok: false,
+          result: 'MCP Server недоступен. Запустите winremote-mcp.exe на http://127.0.0.1:8090/mcp.',
+          executionTimeMs: Math.round(performance.now() - start),
+        };
       }
 
       return {
-        ok: true,
-        result: output,
+        ok: false,
+        result: res.result,
+        executionTimeMs: res.executionTimeMs || Math.round(performance.now() - start),
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        result: `MCP Server недоступен. Запустите winremote-mcp.exe на http://127.0.0.1:8090/mcp (${err.message})`,
         executionTimeMs: Math.round(performance.now() - start),
       };
     }
-
-    return {
-      ok: true,
-      result: `Tool '${name}' executed successfully with params: ${JSON.stringify(args)}`,
-      executionTimeMs: Math.round(performance.now() - start),
-    };
   }
 }

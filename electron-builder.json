@@ -1,0 +1,19 @@
+{
+  "appId": "com.mcpstudio.app",
+  "productName": "MCP Universal Studio",
+  "directories": {
+    "output": "dist-electron"
+  },
+  "win": {
+    "target": "portable",
+    "icon": "build/icon.ico"
+  },
+  "files": [
+    "main.js",
+    "preload.js",
+    "webview-preload.js",
+    "dist/**/*",
+    "package.json"
+  ],
+  "extraResources": []
+}
